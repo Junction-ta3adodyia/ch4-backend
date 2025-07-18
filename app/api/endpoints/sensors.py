@@ -47,11 +47,18 @@ async def add_sensor_data(
     
     try:
         print(f"🔍 Processing sensor data for pond {sensor_data.pond_id}")
-        # Verify pond access
-        pond = db.query(Pond).filter(
-            Pond.id == sensor_data.pond_id,
-            Pond.assigned_users.any(id=current_user.id)
-        ).first()
+        if current_user.role == UserRole.ADMIN:
+            print(f"👤 User {current_user.username} is an admin, proceeding with data submission")
+            # Verify pond access
+            pond = db.query(Pond).filter(
+                Pond.id == sensor_data.pond_id,
+            ).first()
+        else:
+            # Verify pond access
+            pond = db.query(Pond).filter(
+                Pond.id == sensor_data.pond_id,
+                Pond.assigned_users.any(id=current_user.id)
+            ).first()
         
         if not pond:
             print(f"⚠️  Pond {sensor_data.pond_id} not found or no permission for user {current_user.username}")
