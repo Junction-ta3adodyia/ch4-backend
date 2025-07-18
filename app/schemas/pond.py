@@ -8,6 +8,7 @@ from typing import Optional, Dict, Any, List
 from datetime import datetime
 from uuid import UUID
 from app.schemas.alert import AlertSeverity
+from app.schemas.pond import UserRole
 
 class PondBase(BaseModel):
     """Base pond schema with common fields"""
@@ -94,7 +95,8 @@ class PondWithStats(PondResponse):
     health_grade: Optional[str] = None
     active_alerts_count: int = Field(default=0, ge=0)
     last_data_timestamp: Optional[datetime] = None
-    
+    push_notifications: bool = True
+
     class Config:
         from_attributes = True
 
@@ -116,6 +118,8 @@ class UserBase(BaseModel):
 class UserCreate(UserBase):
     """Schema for user registration"""
     password: str = Field(..., min_length=8, max_length=100)
+    role: UserRole = Field(default=UserRole.OBSERVER, description="Role of the user")
+
 
 
 class UserUpdate(BaseModel):
@@ -128,6 +132,7 @@ class UserUpdate(BaseModel):
     email_notifications: Optional[bool] = None
     sms_notifications: Optional[bool] = None
     push_notifications: Optional[bool] = None
+    role: UserRole
 
 
 class UserInDB(UserBase):
@@ -145,6 +150,8 @@ class UserInDB(UserBase):
 
 class UserResponse(UserInDB):
     """User response schema (excludes sensitive data)"""
+    assigned_ponds: List[PondSummary] = [] # Show assigned ponds
+
     pass
 
 class HealthAssessment(BaseModel):

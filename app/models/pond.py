@@ -3,14 +3,28 @@ Pond model - Represents fish ponds/tanks
 Contains pond metadata, location, and configuration
 """
 
-from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, Text, ForeignKey
+from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, Text, ForeignKey, Table, Enum
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 import uuid
+import enum
+
 
 from app.database import Base
 
+# Define an Enum for user roles
+class UserRole(str, enum.Enum):
+    ADMIN = "admin"
+    MANAGER = "manager"
+    OBSERVER = "observer"
+
+# Association table for the many-to-many relationship between users and ponds
+user_pond_association = Table(
+    'user_pond_association', Base.metadata,
+    Column('user_id', Integer, ForeignKey('users.id'), primary_key=True),
+    Column('pond_id', Integer, ForeignKey('ponds.id'), primary_key=True)
+)
 
 class Pond(Base):
     """
@@ -63,7 +77,15 @@ class Pond(Base):
     sensor_data = relationship("SensorData", back_populates="pond", cascade="all, delete-orphan")
     alerts = relationship("Alert", back_populates="pond", cascade="all, delete-orphan")
     health_records = relationship("PondHealth", back_populates="pond", cascade="all, delete-orphan")
-    
+    owner = relationship("User", back_populates="owned_ponds")
+    assigned_users = relationship(
+        "User",
+        secondary=user_pond_association,
+        back_populates="assigned_ponds"
+    )
+
+
+
     def __repr__(self):
         return f"<Pond(id={self.id}, name='{self.name}', active={self.is_active})>"
 
@@ -99,15 +121,20 @@ class User(Base):
     push_notifications = Column(Boolean, default=True)
     
     # Status and permissions
+    role = Column(Enum(UserRole), nullable=False, default=UserRole.OBSERVER)
     is_active = Column(Boolean, default=True)
     is_verified = Column(Boolean, default=False)
-    is_admin = Column(Boolean, default=False)  # Add this for admin checking
+    # is_admin = Column(Boolean, default=False)  # Add this for admin checking
     last_login = Column(DateTime, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
     
     # Relationships
-    ponds = relationship("Pond", backref="owner")
-    
+    owned_ponds = relationship("Pond", back_populates="owner")
+    assigned_ponds = relationship(
+        "Pond",
+        secondary=user_pond_association,
+        back_populates="assigned_users"
+    )
     def __repr__(self):
         return f"<User(id={self.id}, username='{self.username}')>"

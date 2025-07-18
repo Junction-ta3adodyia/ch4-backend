@@ -28,8 +28,13 @@ async def get_ponds(
     search: Optional[str] = Query(None, description="Search pond names")
 ):
     """Get list of user's ponds with summary information"""
-    query = db.query(Pond).filter(Pond.owner_id == current_user.id)
-    
+    # Show ponds the user owns OR is assigned to
+    query = db.query(Pond).filter(
+        or_(
+            Pond.owner_id == current_user.id,
+            Pond.assigned_users.any(id=current_user.id)
+        )
+    )    
     # Apply filters
     if active_only:
         query = query.filter(Pond.is_active == True)
