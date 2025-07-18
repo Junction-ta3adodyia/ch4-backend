@@ -60,7 +60,7 @@ class PondInDB(PondBase):
     """Schema for pond data from database"""
     id: int
     uuid: UUID
-    owner_id: Optional[int]
+    assigned_users: Optional[int]
     is_active: bool
     created_at: datetime
     updated_at: datetime

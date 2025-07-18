@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 
 from app.database import get_db
 from app.models.alert import Alert, AlertRule, AlertStatus, AlertSeverity
-from app.models.pond import Pond, User
+from app.models.pond import Pond, User, UserRole
 from app.schemas import alert as alert_schemas
 from app.api.deps import get_current_active_user, check_pond_ownership, get_pagination_params
 from app.services.notification import NotificationService
@@ -30,9 +30,12 @@ async def get_alert_rules(
     """
     Get alert rules for user's ponds
     """
-    query = db.query(AlertRule).join(Pond).filter(Pond.owner_id == current_user.id)
-    
-    if pond_id:
+    if current_user.role != UserRole.ADMIN:
+        query = db.query(AlertRule).join(Pond).filter(Pond.assigned_users.any(id=current_user.id))
+    else:
+        query = db.query(AlertRule)
+
+    if pond_id and current_user != UserRole.ADMIN:
         check_pond_ownership(pond_id, current_user, db)
         query = query.filter(AlertRule.pond_id == pond_id)
     
@@ -140,8 +143,13 @@ async def get_alerts(
     """
     Get alerts with filtering options
     """
-    # Base query - only user's ponds
-    query = db.query(Alert).join(Pond).filter(Pond.owner_id == current_user.id)
+    if current_user.role != UserRole.ADMIN:
+        # Non-admin users can only see their own ponds' alerts
+        query_params.pond_id = current_user.id
+        query = db.query(Alert).join(Pond).filter(Pond.assigned_users.any(id=current_user.id))
+    else:
+        # Admins can see all alerts
+        query = db.query(Alert)
     
     # Apply filters
     if query_params.pond_id:
@@ -279,7 +287,7 @@ async def resolve_alerts(
     alerts = db.query(Alert).join(Pond).filter(
         and_(
             Alert.id.in_(resolve_data.alert_ids),
-            Pond.owner_id == current_user.id,
+            Pond.assigned_users(id = current_user.id),
             Alert.status.in_([AlertStatus.ACTIVE, AlertStatus.ACKNOWLEDGED])
         )
     ).all()

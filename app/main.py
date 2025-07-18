@@ -16,7 +16,7 @@ import uvicorn
 import logging
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
-from app.models.pond import Pond, User
+from app.models.pond import Pond, User, UserRole
 from app.models.sensor import SensorData
 from sqlalchemy.orm import Session
 from app.api.deps import get_current_active_user
@@ -311,38 +311,55 @@ async def get_dashboard_summary(
     Get dashboard summary data
     """
     # Get user's ponds
-    user_ponds = db.query(Pond).filter(Pond.owner_id == current_user.id).all()
-    
+    user_ponds = db.query(Pond).filter(Pond.assigned_users.any(id=current_user.id)).all()
+
+
     # Calculate summary statistics
     total_ponds = len(user_ponds)
     active_ponds = len([p for p in user_ponds if p.is_active])
     
     # Get active alerts
     from app.models.alert import Alert, AlertStatus, AlertSeverity
+    if current_user.role != UserRole.ADMIN:
+        # Non-admin users can only see their own ponds' alerts
+        active_alerts = db.query(Alert).join(Pond).filter(
+            and_(
+                Pond.assigned_users.any(id=current_user.id),
+                Alert.status == AlertStatus.ACTIVE
+            )
+        ).count()
+    else:
+        # Admins can see all active alerts
+        active_alerts = db.query(Alert).filter(Alert.status == AlertStatus.ACTIVE).count()
     
-    active_alerts = db.query(Alert).join(Pond).filter(
-        and_(
-            Pond.owner_id == current_user.id,
-            Alert.status == AlertStatus.ACTIVE
-        )
-    ).count()
-    
-    critical_alerts = db.query(Alert).join(Pond).filter(
-        and_(
-            Pond.owner_id == current_user.id,
-            Alert.status == AlertStatus.ACTIVE,
-            Alert.severity == AlertSeverity.CRITICAL
-        )
-    ).count()
+    if current_user.role == UserRole.ADMIN:
+        # Admins can see all ponds' critical alerts
+        critical_alerts = db.query(Alert).filter(
+            and_(
+                Alert.status == AlertStatus.ACTIVE,
+                Alert.severity == AlertSeverity.CRITICAL
+            )
+        ).count()
+    else:
+        # Non-admin users only see critical alerts for their ponds
+
+        critical_alerts = db.query(Alert).join(Pond).filter(
+            and_(
+                Pond.assigned_users.any(id=current_user.id),
+                Alert.status == AlertStatus.ACTIVE,
+                Alert.severity == AlertSeverity.CRITICAL
+            )
+        ).count()
     
     # Get recent readings count
     recent_threshold = datetime.utcnow() - timedelta(hours=24)
-    recent_readings = db.query(SensorData).join(Pond).filter(
-        and_(
-            Pond.owner_id == current_user.id,
-            SensorData.timestamp >= recent_threshold
-        )
-    ).count()
+    if current_user.role != UserRole.ADMIN:        
+        recent_readings = db.query(SensorData).join(Pond).filter(
+            and_(
+                Pond.assigned_users.any(id=current_user.id),
+                SensorData.timestamp >= recent_threshold
+            )
+        ).count()
     
     # Get health distribution (simplified)
     health_distribution = {

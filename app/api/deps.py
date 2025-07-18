@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from jose import JWTError
 
 from app.database import get_db
-from app.models.pond import User, Pond
+from app.models.pond import User, Pond, UserRole
 from app.core.security import verify_token  # Now this import should work
 from app.config import settings
 
@@ -100,7 +100,7 @@ def check_pond_ownership(
             detail="Pond not found"
         )
     
-    if pond.owner_id != current_user.id and not current_user.is_admin:
+    if current_user.id not in pond.assigned_users and not current_user.role == UserRole.ADMIN:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not enough permissions to access this pond"
