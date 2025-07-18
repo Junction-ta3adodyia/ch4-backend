@@ -20,8 +20,8 @@ NUM_READINGS = 50  # Increased for better anomaly testing
 INTERVAL_SECONDS = 2  # 2 seconds between readings
 
 # Authentication credentials
-USERNAME = "test"
-PASSWORD = "testpw123"
+USERNAME = "admin"
+PASSWORD = "saidani2003"
 
 # Normal ranges for aquaculture parameters
 NORMAL_RANGES = {

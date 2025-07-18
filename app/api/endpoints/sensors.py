@@ -3,15 +3,15 @@ Sensor data endpoints
 Handle sensor data collection, validation, and storage
 """
 
+from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Query
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy import and_, desc, func
-from datetime import datetime, timedelta, timezone
 
 from app.api.deps import get_db, get_current_active_user
-from app.models.pond import User
+from app.models.pond import User, UserRole # Import UserRole
 from app.models.pond import Pond
 from app.models.sensor import SensorData
 from app.schemas.sensor import (
@@ -47,22 +47,20 @@ async def add_sensor_data(
     
     try:
         print(f"🔍 Processing sensor data for pond {sensor_data.pond_id}")
-        
-        # Verify pond ownership
+        # Verify pond access
         pond = db.query(Pond).filter(
-            and_(
-                Pond.id == sensor_data.pond_id, 
-                Pond.owner_id == current_user.id
-            )
+            Pond.id == sensor_data.pond_id,
+            Pond.assigned_users.any(id=current_user.id)
         ).first()
         
         if not pond:
+            print(f"⚠️  Pond {sensor_data.pond_id} not found or no permission for user {current_user.username}")
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Pond not found or you don't have permission to add data to this pond"
             )
         
-        print(f"✅ Pond ownership verified: {pond.name}")
+        print(f"✅ Pond access verified for user '{current_user.username}' on pond '{pond.name}'")
         
         # Validate sensor data quality
         quality_score = validate_sensor_data(sensor_data)
@@ -96,7 +94,7 @@ async def add_sensor_data(
         except Exception as anomaly_error:
             print(f"❌ Anomaly detection failed: {anomaly_error}")
             import traceback
-            # traceback.print_exc()
+            traceback.print_exc()
         
         # Create database record
         print("💾 Creating sensor data record...")
@@ -151,7 +149,7 @@ async def add_sensor_data(
     except Exception as e:
         print(f"❌ Unexpected error in add_sensor_data: {str(e)}")
         import traceback
-        # traceback.print_exc()
+        traceback.print_exc()
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -198,21 +196,19 @@ async def add_sensor_data_batch(
         # Process batch validation first
         batch_results = await process_sensor_data_batch(batch_data.readings, db)
         
-        # Verify pond ownership for all ponds in batch
+        # Verify pond access for all ponds in batch
         pond_ids = list(set(reading.pond_id for reading in batch_data.readings))
-        user_ponds = db.query(Pond.id).filter(
-            and_(
-                Pond.id.in_(pond_ids),
-                Pond.owner_id == current_user.id
-            )
+        accessible_ponds = db.query(Pond.id).filter(
+            Pond.id.in_(pond_ids),
+            Pond.assigned_users.any(id=current_user.id)
         ).all()
         
-        user_pond_ids = {pond.id for pond in user_ponds}
+        accessible_pond_ids = {pond.id for pond in accessible_ponds}
         
         for i, sensor_data in enumerate(batch_data.readings):
             try:
-                # Check pond ownership
-                if sensor_data.pond_id not in user_pond_ids:
+                # Check pond access
+                if sensor_data.pond_id not in accessible_pond_ids:
                     errors.append(f"Reading {i}: Pond {sensor_data.pond_id} not found or no permission")
                     continue
                 
@@ -258,7 +254,7 @@ async def add_sensor_data_batch(
                 db.refresh(record)
             
             # Process alerts for all ponds in background
-            for pond_id in user_pond_ids:
+            for pond_id in accessible_pond_ids:
                 background_tasks.add_task(
                     process_sensor_alerts, 
                     pond_id, 
@@ -279,7 +275,6 @@ async def add_sensor_data_batch(
             detail=f"Batch processing error: {str(e)}"
         )
 
-
 @router.get("/data", response_model=List[SensorDataResponse])
 async def get_sensor_data(
     query: SensorDataQuery = Depends(),
@@ -289,9 +284,9 @@ async def get_sensor_data(
     """Get sensor data with filtering and pagination"""
     
     try:
-        # Base query with user's ponds only
+        # Base query for ponds the user is assigned to
         base_query = db.query(SensorData).join(Pond).filter(
-            Pond.owner_id == current_user.id
+            Pond.assigned_users.any(id=current_user.id)
         )
         
         # Apply filters
@@ -334,16 +329,14 @@ async def get_sensor_data_by_id(
     """Get specific sensor data by ID"""
     
     sensor_data = db.query(SensorData).join(Pond).filter(
-        and_(
-            SensorData.id == sensor_id,
-            Pond.owner_id == current_user.id
-        )
+        SensorData.id == sensor_id,
+        Pond.assigned_users.any(id=current_user.id)
     ).first()
     
     if not sensor_data:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Sensor data not found"
+            detail="Sensor data not found or no permission"
         )
     
     return sensor_data
@@ -359,18 +352,16 @@ async def update_sensor_data(
     """Update sensor data"""
     
     try:
-        # Get sensor data with ownership check
+        # Get sensor data with access check
         sensor_data = db.query(SensorData).join(Pond).filter(
-            and_(
-                SensorData.id == sensor_id,
-                Pond.owner_id == current_user.id
-            )
+            SensorData.id == sensor_id,
+            Pond.assigned_users.any(id=current_user.id)
         ).first()
         
         if not sensor_data:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Sensor data not found"
+                detail="Sensor data not found or no permission"
             )
         
         # Update fields
@@ -418,17 +409,16 @@ async def delete_sensor_data(
     """Delete sensor data"""
     
     try:
+        # Check access before deleting
         sensor_data = db.query(SensorData).join(Pond).filter(
-            and_(
-                SensorData.id == sensor_id,
-                Pond.owner_id == current_user.id
-            )
+            SensorData.id == sensor_id,
+            Pond.assigned_users.any(id=current_user.id)
         ).first()
         
         if not sensor_data:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Sensor data not found"
+                detail="Sensor data not found or no permission"
             )
         
         db.delete(sensor_data)
@@ -451,15 +441,16 @@ async def get_anomaly_detector_status(
 ):
     """Get Page-Hinkley detector status for a pond"""
     
-    # Verify pond ownership
+    # Verify pond access
     pond = db.query(Pond).filter(
-        and_(Pond.id == pond_id, Pond.owner_id == current_user.id)
+        Pond.id == pond_id,
+        Pond.assigned_users.any(id=current_user.id)
     ).first()
     
     if not pond:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Pond not found"
+            detail="Pond not found or no permission"
         )
     
     from app.services.page_hinkley import get_page_hinkley_diagnostics

@@ -12,7 +12,7 @@ from sqlalchemy import and_, desc
 from app.database import SessionLocal
 from app.models.alert import Alert, AlertRule, AlertSeverity, AlertStatus
 from app.models.sensor import SensorData
-from app.models.pond import Pond, User
+from app.models.pond import Pond, User, UserRole
 from app.config import settings
 from app.services.notification import NotificationService
 
@@ -279,74 +279,69 @@ def _generate_alert_messages(
 
 async def _send_alert_notification(alert: Alert, rule: AlertRule, db: Session):
     """
-    Send alert notification via configured channels
+    Send alert notification via configured channels.
+    Emails will be sent to assigned observers with admins in CC.
     """
     try:
-        # Get pond owner
+        # Get pond
         pond = db.query(Pond).filter(Pond.id == alert.pond_id).first()
-        if not pond or not pond.owner:
+        if not pond:
             return
+
+        # Get assigned observers for the pond
+        observers = [user for user in pond.assigned_users if user.role == UserRole.OBSERVER and user.is_active]
+        if not observers:
+            # Fallback to pond owner if no observers are assigned
+            if pond.owner and pond.owner.is_active:
+                observers.append(pond.owner)
+            else:
+                return # No one to notify
+
+        # Get all admin users to CC
+        admins = db.query(User).filter(User.role == UserRole.ADMIN, User.is_active).all()
         
-        user = pond.owner
         notification_service = NotificationService()
         
         # Determine which notifications to send based on rule configuration
-        notifications_sent = {}
-        
-        # Email notification
-        if rule.send_email and user.email_notifications:
-            try:
-                await notification_service.send_email_alert(alert, user)
-                notifications_sent['email'] = {
-                    'sent_at': datetime.utcnow().isoformat(),
-                    'status': 'sent',
-                    'recipient': user.email
-                }
-            except Exception as e:
-                notifications_sent['email'] = {
-                    'sent_at': datetime.utcnow().isoformat(),
-                    'status': 'failed',
-                    'error': str(e)
-                }
-        
-        # SMS notification
-        if rule.send_sms and user.sms_notifications and user.phone_number:
-            try:
-                await notification_service.send_sms_alert(alert, user)
-                notifications_sent['sms'] = {
-                    'sent_at': datetime.utcnow().isoformat(),
-                    'status': 'sent',
-                    'recipient': user.phone_number
-                }
-            except Exception as e:
-                notifications_sent['sms'] = {
-                    'sent_at': datetime.utcnow().isoformat(),
-                    'status': 'failed',
-                    'error': str(e)
-                }
-        
-        # Push notification
-        if rule.send_push and user.push_notifications:
-            try:
-                await notification_service.send_push_alert(alert, user)
-                notifications_sent['push'] = {
-                    'sent_at': datetime.utcnow().isoformat(),
-                    'status': 'sent',
-                    'recipient': 'push_token'
-                }
-            except Exception as e:
-                notifications_sent['push'] = {
-                    'sent_at': datetime.utcnow().isoformat(),
-                    'status': 'failed',
-                    'error': str(e)
-                }
-        
-        # Update alert with notification status
-        alert.notifications_sent = notifications_sent
+        # We will send one email to all observers with admins in CC.
+        if rule.send_email:
+            # Check if at least one observer has email notifications enabled
+            if any(o.email_notifications for o in observers):
+                try:
+                    await notification_service.send_email_alert_to_observers(alert, observers, admins)
+                except Exception as e:
+                    print(f"Failed to send email alert for alert {alert.id}: {e}")
+
+        # Send SMS and Push notifications to each observer individually
+        for user in observers:
+            notifications_sent = {}
+            # SMS notification
+            if rule.send_sms and user.sms_notifications and user.phone_number:
+                try:
+                    await notification_service.send_sms_alert(alert, user)
+                    notifications_sent['sms'] = {'status': 'sent', 'recipient': user.phone_number}
+                except Exception as e:
+                    notifications_sent['sms'] = {'status': 'failed', 'error': str(e)}
+            
+            # Push notification
+            if rule.send_push and user.push_notifications:
+                try:
+                    await notification_service.send_push_alert(alert, user)
+                    notifications_sent['push'] = {'status': 'sent'}
+                except Exception as e:
+                    notifications_sent['push'] = {'status': 'failed', 'error': str(e)}
+            
+            # Update alert with notification status for the user
+            if 'notifications' not in alert.context_data:
+                alert.context_data['notifications'] = {}
+            alert.context_data['notifications'][user.email] = notifications_sent
+            
+        db.add(alert)
         db.commit()
-        
+
     except Exception as e:
-        print(f"Error sending alert notification: {e}")
+        print(f"Error sending alert notification for alert {alert.id}: {e}")
+        db.rollback()
 
 
 def check_for_stale_data():

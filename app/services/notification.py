@@ -7,7 +7,7 @@ import asyncio
 import aiosmtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from typing import Optional, Dict, Any
+from typing import List, Optional, Dict, Any
 from datetime import datetime
 import json
 
@@ -40,45 +40,54 @@ class NotificationService:
         if settings.FIREBASE_SERVER_KEY:
             self.fcm_service = FCMNotification(api_key=settings.FIREBASE_SERVER_KEY)
     
-    async def send_email_alert(self, alert: Alert, user: User) -> bool:
+    async def send_email_alert_to_observers(self, alert: Alert, observers: List[User], admins: List[User]) -> bool:
         """
-        Send email alert notification
+        Send email alert notification to a list of observers and CC admins.
         """
         if not settings.SMTP_USERNAME or not settings.SMTP_PASSWORD:
             return False
-        
+
+        observer_emails = [u.email for u in observers if u.email and u.email_notifications]
+        if not observer_emails:
+            return False
+
+        admin_emails_cc = [a.email for a in admins if a.email]
+
+        # Use the language of the first observer for the message
+        message_text = self._get_localized_message(alert, observers[0].language)
+
         try:
-            # Choose message based on user language
-            message_text = self._get_localized_message(alert, user.language)
-            
-            # Create email
             msg = MIMEMultipart('alternative')
             msg['Subject'] = f"🚨 Aquaculture Alert - {alert.title}"
             msg['From'] = settings.SMTP_USERNAME
-            msg['To'] = user.email
-            
-            # Create HTML content
-            html_content = self._create_email_html(alert, user, message_text)
+            msg['To'] = ", ".join(observer_emails)
+            if admin_emails_cc:
+                msg['Cc'] = ", ".join(admin_emails_cc)
+
+            html_content = self._create_email_html(alert, observers[0], message_text)
             html_part = MIMEText(html_content, 'html', 'utf-8')
             msg.attach(html_part)
-            
-            # Send email
+
             async with aiosmtplib.SMTP(
-                hostname=settings.SMTP_SERVER,
-                port=settings.SMTP_PORT,
-                start_tls=True
+                hostname=settings.SMTP_SERVER, port=settings.SMTP_PORT, start_tls=True
             ) as smtp:
                 await smtp.login(settings.SMTP_USERNAME, settings.SMTP_PASSWORD)
                 await smtp.send_message(msg)
-            
-            # Log notification
-            await self._log_notification(alert.id, user.id, 'email', user.email, message_text, 'sent')
+
+            # Log notification for each recipient
+            all_recipients = observers + admins
+            for user in all_recipients:
+                if user.email:
+                    await self._log_notification(alert.id, user.id, 'email', user.email, message_text, 'sent')
             
             return True
-            
         except Exception as e:
-            await self._log_notification(alert.id, user.id, 'email', user.email, message_text, 'failed', str(e))
-            print(f"Failed to send email: {e}")
+            print(f"Failed to send observer email alert: {e}")
+            # Log failure for each recipient
+            all_recipients = observers + admins
+            for user in all_recipients:
+                if user.email:
+                    await self._log_notification(alert.id, user.id, 'email', user.email, message_text, 'failed', str(e))
             return False
     
     async def send_sms_alert(self, alert: Alert, user: User) -> bool:
