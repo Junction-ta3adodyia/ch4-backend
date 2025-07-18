@@ -25,7 +25,7 @@ import time
 
 from app.config import settings
 from app.database import engine, Base, get_db
-from app.api.endpoints import auth, ponds, sensors, alerts
+from app.api.endpoints import auth, ponds, sensors, alerts, users
 from app.tasks.data_aggregation import (
     aggregate_hourly_data,
     aggregate_daily_data,
@@ -237,6 +237,7 @@ async def general_exception_handler(request: Request, exc: Exception):
 
 # Include routers
 app.include_router(auth.router, prefix="/api/v1")
+app.include_router(users.router, prefix="/api/v1")
 app.include_router(ponds.router, prefix="/api/v1")
 app.include_router(sensors.router, prefix="/api/v1")
 app.include_router(alerts.router, prefix="/api/v1")

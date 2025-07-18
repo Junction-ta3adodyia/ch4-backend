@@ -8,7 +8,7 @@ from typing import Optional, Dict, Any, List
 from datetime import datetime
 from uuid import UUID
 from app.schemas.alert import AlertSeverity
-from app.schemas.pond import UserRole
+from app.models.pond import UserRole
 
 class PondBase(BaseModel):
     """Base pond schema with common fields"""

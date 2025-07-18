@@ -16,7 +16,7 @@ from app.models.pond import Pond
 from app.config import settings
 
 
-async def calculate_pond_health(
+def calculate_pond_health(
     pond_id: int, 
     db: Session, 
     days: int = 7
