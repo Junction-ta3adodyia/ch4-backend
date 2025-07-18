@@ -263,11 +263,14 @@ async def _send_daily_summaries(db: Session, start_time: datetime, end_time: dat
     notification_service = NotificationService()
     
     # Get users who want daily summaries
-    users_for_summaries = db.query(Pond.owner_id).filter(
-        Pond.daily_summary_enabled == True
-    ).distinct().all()
+    users_with_summaries = db.query(User).filter(
+        User.daily_summary_enabled == True
+    ).all()
+    if not users_with_summaries:
+        print("No users with daily summaries enabled")
+        return
     
-    for (user_id,) in users_for_summaries:
+    for (user_id,) in users_with_summaries:
         try:
             user = db.query(User).filter(User.id == user_id).first()
             if not user or not user.email:

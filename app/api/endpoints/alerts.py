@@ -80,13 +80,16 @@ async def update_alert_rule(
     """
     Update an alert rule
     """
-    # Get rule and check ownership
-    rule = db.query(AlertRule).join(Pond).filter(
-        and_(
-            AlertRule.id == rule_id,
-            Pond.owner_id == current_user.id
-        )
-    ).first()
+    if current_user.role != UserRole.ADMIN:
+        # Get rule and check ownership
+        rule = db.query(AlertRule).join(Pond).filter(
+            and_(
+                AlertRule.id == rule_id,
+                Pond.owner_id == current_user.id
+            )
+        ).first()
+    else:
+        rule = db.query(AlertRule).filter(AlertRule.id == rule_id).first()
     
     if not rule:
         raise HTTPException(
@@ -115,13 +118,17 @@ async def delete_alert_rule(
     Delete an alert rule
     """
     # Get rule and check ownership
-    rule = db.query(AlertRule).join(Pond).filter(
-        and_(
-            AlertRule.id == rule_id,
-            Pond.owner_id == current_user.id
-        )
-    ).first()
+    if current_user.role != UserRole.ADMIN:
     
+        rule = db.query(AlertRule).join(Pond).filter(
+            and_(
+                AlertRule.id == rule_id,
+                Pond.owner_id == current_user.id
+            )
+        ).first()
+    else:
+        rule = db.query(AlertRule).filter(AlertRule.id == rule_id).first()
+
     if not rule:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -202,12 +209,17 @@ async def get_active_alerts(
     """
     Get all active alerts for user's ponds
     """
-    query = db.query(Alert).join(Pond).filter(
-        and_(
-            Pond.owner_id == current_user.id,
-            Alert.status == AlertStatus.ACTIVE
+    if current_user.role != UserRole.ADMIN:
+        # Non-admin users can only see their own ponds' active alerts
+        query = db.query(Alert).join(Pond).filter(
+            and_(
+                Pond.assigned_users.any(id=current_user.id),
+                Alert.status == AlertStatus.ACTIVE
+            )
         )
-    )
+    else:
+        # Admins can see all active alerts
+        query = db.query(Alert).filter(Alert.status == AlertStatus.ACTIVE)
     
     if severity:
         query = query.filter(Alert.severity == severity)
@@ -238,14 +250,24 @@ async def acknowledge_alerts(
     Acknowledge multiple alerts
     """
     # Get alerts and verify ownership
-    alerts = db.query(Alert).join(Pond).filter(
-        and_(
-            Alert.id.in_(acknowledge_data.alert_ids),
-            Pond.owner_id == current_user.id,
-            Alert.status == AlertStatus.ACTIVE
-        )
-    ).all()
-    
+    if current_user.role != UserRole.ADMIN:
+        alerts = db.query(Alert).join(Pond).filter(
+            and_(
+                Alert.id.in_(acknowledge_data.alert_ids),
+                Pond.assigned_users.any(id=current_user.id),
+                Alert.status == AlertStatus.ACTIVE
+            )
+        ).all()
+
+    else:
+        # Admins can acknowledge any active alerts
+        alerts = db.query(Alert).filter(
+            and_(
+                Alert.id.in_(acknowledge_data.alert_ids),
+                Alert.status == AlertStatus.ACTIVE
+            )
+        ).all()
+        
     if len(alerts) != len(acknowledge_data.alert_ids):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -323,7 +345,11 @@ async def get_alert_statistics(
     start_date = datetime.utcnow() - timedelta(days=days)
     
     # Get user's pond IDs
-    user_pond_ids = db.query(Pond.id).filter(Pond.owner_id == current_user.id).subquery()
+    if current_user.role != UserRole.ADMIN:
+        user_pond_ids = db.query(Pond.id).filter(Pond.assigned_users.any(id=current_user.id)).subquery()
+    else:
+        # Admins can see all ponds
+        user_pond_ids = db.query(Pond.id).subquery()
     
     # Total alerts in period
     total_alerts = db.query(Alert).filter(
