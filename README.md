@@ -1,38 +1,64 @@
 # 🐟 Aquaculture Management System - Backend
 
-A comprehensive IoT-based aquaculture monitoring and management system designed for fish farms in Algeria. This FastAPI-powered backend provides real-time water quality monitoring, anomaly detection, automated alerting, and comprehensive analytics for optimizing aquaculture operations.
+A comprehensive IoT-based aquaculture monitoring and management system designed for fish farms in Algeria. This FastAPI-powered backend provides real-time water quality monitoring, advanced anomaly detection, automated alerting, comprehensive analytics, and a complete sensor simulation ecosystem for optimizing aquaculture operations.
 
 ## 🌟 Features
 
-### 🔍 Real-time Monitoring
-- **Multi-sensor Support**: Temperature, pH, dissolved oxygen, turbidity, and ammonia monitoring
-- **Live Data Processing**: Real-time sensor data ingestion and validation
-- **Data Quality Assurance**: Automated data cleaning and outlier detection
-- **Historical Analytics**: Comprehensive trend analysis and reporting
+### 🔍 Real-time Monitoring & Data Ingestion
+- **Multi-sensor Support**: Temperature, pH, dissolved oxygen, turbidity, ammonia, nitrate, nitrite, salinity monitoring
+- **Live Data Processing**: Real-time sensor data ingestion with HMAC-secured authentication
+- **Data Quality Assurance**: Automated data cleaning, validation, and outlier detection
+- **Historical Analytics**: Comprehensive trend analysis and reporting with time-series data
+- **Fish Biometrics**: Fish count, length, and weight tracking for growth monitoring
+- **Water System Monitoring**: Water level and flow rate tracking for system health
 
-### 🚨 Intelligent Alerting System
-- **Page-Hinkley Change Detection**: Advanced anomaly detection using statistical change point detection
+### 🚨 Advanced Anomaly Detection & Alerting
+- **Page-Hinkley Change Detection**: Statistical change point detection with configurable parameters
+- **Real-time Anomaly Processing**: Immediate anomaly detection with customizable thresholds
 - **Multi-level Alerts**: Critical, warning, and informational alert classifications
 - **Smart Notifications**: Email alerts with multilingual support (Arabic, French, English)
-- **Alert Management**: Configurable thresholds and notification preferences
+- **Alert Management**: Configurable thresholds, notification preferences, and alert rules
+- **Automated Response**: Background task processing for immediate alert handling
+
+### � Advanced Security & API Management
+- **HMAC-Secured Ingestion**: Military-grade HMAC-SHA256 authentication for sensor data
+- **Multi-User API Keys**: Granular API key management with user-specific access controls
+- **JWT Authentication**: Secure token-based authentication with role-based access
+- **Replay Attack Prevention**: Timestamp validation and signature verification
+- **Usage Tracking**: API key usage monitoring and rate limiting capabilities
+- **Audit Trail**: Comprehensive logging of all sensor data submissions
+
+### 🧪 Comprehensive Sensor Simulation Ecosystem
+- **Advanced Simulator**: Realistic aquaculture sensor behavior simulation
+- **Multiple Scenarios**: Normal operations, anomaly injection, equipment failure, feeding cycles
+- **Realistic Data Patterns**: Daily cycles, seasonal variations, and parameter correlations
+- **Anomaly Testing**: Controlled anomaly injection for system validation
+- **CLI Tools**: Command-line sensor simulator for automated testing
+- **API Management**: REST endpoints for simulation control and monitoring
+- **Background Processing**: Asynchronous simulation tasks with real-time status updates
 
 ### 📊 Analytics & Insights
-- **Health Score Calculation**: Automated pond health assessment based on multiple parameters
+- **Health Score Calculation**: Multi-parameter pond health assessment algorithms
 - **Trend Analysis**: Historical data visualization and pattern recognition
 - **Performance Metrics**: KPI tracking and optimization recommendations
 - **Data Aggregation**: Hourly and daily data summaries for efficient querying
+- **Anomaly Statistics**: Comprehensive anomaly detection reporting and analysis
+- **Quality Scoring**: Automated data quality assessment and validation
 
-### 🏢 Multi-tenancy & Security
-- **Organization Management**: Multi-tenant architecture with role-based access
-- **JWT Authentication**: Secure API access with token-based authentication
-- **User Roles**: Admin, manager, and operator permission levels
-- **Data Isolation**: Secure data separation between organizations
+### 🏢 Multi-tenancy & Role Management
+- **Organization Management**: Multi-tenant architecture with complete data isolation
+- **Advanced User Roles**: Admin, manager, operator, and pond-specific permissions
+- **Pond Assignment**: Flexible user-to-pond assignment with granular access control
+- **Resource Isolation**: Secure data separation between organizations and users
+- **Permission Management**: Fine-grained access control for all system resources
 
-### 🌐 API & Integration
+### 🌐 API & Integration Capabilities
 - **RESTful API**: Comprehensive REST endpoints for all operations
 - **OpenAPI Documentation**: Auto-generated API documentation with Swagger UI
-- **Data Export**: CSV and JSON export capabilities
-- **IoT Integration**: MQTT and HTTP endpoints for sensor data ingestion
+- **Secure IoT Integration**: HMAC-authenticated sensor data ingestion endpoints
+- **Data Export**: Multiple format support (CSV, JSON) with filtering capabilities
+- **Real-time Endpoints**: Live data streaming and real-time monitoring APIs
+- **Simulation APIs**: Complete simulation management and control interfaces
 
 ## 🏗️ Architecture
 
