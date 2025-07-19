@@ -25,13 +25,14 @@ import time
 
 from app.config import settings
 from app.database import engine, Base, get_db
-from app.api.endpoints import auth, ponds, sensors, alerts, users
+from app.api.endpoints import auth, ponds, sensors, alerts, simulation, users, api_key
 from app.tasks.data_aggregation import (
     aggregate_hourly_data,
     aggregate_daily_data,
     cleanup_old_data,
     system_health_check
 )
+
 
 # Configure logging
 logging.basicConfig(
@@ -241,6 +242,10 @@ app.include_router(users.router, prefix="/api/v1")
 app.include_router(ponds.router, prefix="/api/v1")
 app.include_router(sensors.router, prefix="/api/v1")
 app.include_router(alerts.router, prefix="/api/v1")
+app.include_router(api_key.router, prefix="/api-keys", tags=["api-keys"])
+app.include_router(simulation.router, prefix="/simulation", tags=["simulation"])
+
+
 
 
 # Health check endpoints

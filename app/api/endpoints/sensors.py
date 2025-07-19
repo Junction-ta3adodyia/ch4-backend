@@ -4,13 +4,14 @@ Handle sensor data collection, validation, and storage
 """
 
 from datetime import datetime, timezone
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Query
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy import and_, desc, func
 
-from app.api.deps import get_db, get_current_active_user
+from app.api.deps import get_db, get_current_active_user, get_pond_from_api_key
+from app.models.api_key import PondAPIKey
 from app.models.pond import User, UserRole # Import UserRole
 from app.models.pond import Pond
 from app.models.sensor import SensorData
@@ -475,3 +476,153 @@ async def get_anomaly_detector_status(
         "detector_status": diagnostics,
         "timestamp": datetime.now(timezone.utc)
     }
+
+@router.post("/ingest", status_code=status.HTTP_201_CREATED)
+async def ingest_sensor_data(
+    background_tasks: BackgroundTasks,
+    auth_data: Tuple[Pond, User, 'PondAPIKey', dict] = Depends(get_pond_from_api_key),
+    db: Session = Depends(get_db)
+):
+    """
+    Ingest sensor data from authenticated sensors using API Key + HMAC authentication.
+    This endpoint is specifically designed for IoT devices and sensor networks.
+    """
+    pond, api_key_user, api_key_record, payload = auth_data
+    
+    try:
+        print(f"🔒 Secure sensor data ingestion for pond: {pond.name} (ID: {pond.id})")
+        print(f"👤 API key '{api_key_record.name}' belongs to user: {api_key_user.username} (ID: {api_key_user.id})")
+        
+        # Validate payload structure
+        if not payload:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Empty payload"
+            )
+        
+        # Ensure pond_id matches authenticated pond
+        if 'pond_id' in payload and payload['pond_id'] != pond.id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Pond ID in payload does not match authenticated pond"
+            )
+        
+        # Set pond_id if not provided
+        payload['pond_id'] = pond.id
+        
+        # Create sensor data schema
+        try:
+            sensor_data = SensorDataCreate(**payload)
+        except Exception as validation_error:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Invalid sensor data: {str(validation_error)}"
+            )
+
+        # Validate sensor data quality
+        quality_score = validate_sensor_data(sensor_data)
+        print(f"📊 Data quality score: {quality_score}")
+
+        # Detect anomalies with Page-Hinkley method
+        is_anomaly = False
+        anomaly_alert_id = None
+        
+        try:
+            print("🔍 Running Page-Hinkley anomaly detection...")
+            from app.services.page_hinkley import page_hinkley_service
+            
+            anomaly_results = await page_hinkley_service.detect_anomaly_with_alerts(
+                sensor_data.pond_id, sensor_data, db
+            )
+            
+            is_anomaly = anomaly_results['is_anomaly']
+            anomaly_alert_id = anomaly_results.get('alert_id')
+            
+            if is_anomaly:
+                print(f"🚨 ANOMALY DETECTED in Pond {sensor_data.pond_id}")
+                print(f"   Anomaly Score: {anomaly_results['anomaly_score']:.3f}")
+                print(f"   Change Points: {anomaly_results['change_points_detected']}")
+            else:
+                print("✅ No anomaly detected")
+                
+        except Exception as anomaly_error:
+            print(f"❌ Anomaly detection failed: {anomaly_error}")
+            # Continue processing even if anomaly detection fails
+
+        # Create database record
+        print("💾 Creating sensor data record...")
+        db_sensor_data = SensorData(
+            pond_id=sensor_data.pond_id,
+            timestamp=sensor_data.timestamp,
+            temperature=sensor_data.temperature,
+            ph=sensor_data.ph,
+            dissolved_oxygen=sensor_data.dissolved_oxygen,
+            turbidity=sensor_data.turbidity,
+            ammonia=sensor_data.ammonia,
+            nitrate=sensor_data.nitrate,
+            nitrite=sensor_data.nitrite,
+            salinity=sensor_data.salinity,
+            fish_count=sensor_data.fish_count,
+            fish_length=sensor_data.fish_length,
+            fish_weight=sensor_data.fish_weight,
+            water_level=sensor_data.water_level,
+            flow_rate=sensor_data.flow_rate,
+            data_source=sensor_data.data_source or "sensor",
+            quality_score=quality_score,
+            is_anomaly=is_anomaly,
+            entry_id=str(uuid.uuid4()),
+            notes=sensor_data.notes,
+            api_key_id=api_key_record.id  # Track which API key was used
+        )
+
+        db.add(db_sensor_data)
+        db.commit()
+        db.refresh(db_sensor_data)
+        print(f"✅ Sensor data saved with ID: {db_sensor_data.id}")
+
+        # Send email notification if anomaly detected
+        if is_anomaly and anomaly_alert_id:
+            print(f"📧 Scheduling email notification for alert {anomaly_alert_id}")
+            background_tasks.add_task(
+                send_anomaly_email_notification,
+                anomaly_alert_id,
+                db_session_factory=SessionLocal
+            )
+
+        # Process regular sensor alerts in background
+        print("🔔 Scheduling alert processing...")
+        background_tasks.add_task(
+            process_sensor_alerts,
+            sensor_data.pond_id,
+            db_sensor_data.id
+        )
+
+        return {
+            "message": "Sensor data ingested successfully",
+            "sensor_data_id": db_sensor_data.id,
+            "pond_id": pond.id,
+            "pond_name": pond.name,
+            "submitted_by_user": api_key_user.username,
+            "submitted_by_user_id": api_key_user.id,
+            "api_key_name": api_key_record.name,
+            "api_key_id": api_key_record.id,
+            "is_anomaly": is_anomaly,
+            "quality_score": quality_score,
+            "timestamp": db_sensor_data.timestamp.isoformat(),
+            "anomaly_details": {
+                "alert_id": anomaly_alert_id,
+                "detected": is_anomaly
+            } if is_anomaly else None
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Unexpected error in sensor ingestion: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Sensor data ingestion failed: {str(e)}"
+        )

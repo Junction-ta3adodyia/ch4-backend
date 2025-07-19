@@ -21,7 +21,8 @@ class SensorData(Base):
     # Primary key and relationships
     id = Column(Integer, primary_key=True, index=True)
     pond_id = Column(Integer, ForeignKey("ponds.id"), nullable=False, index=True)
-    
+    api_key_id = Column(Integer, ForeignKey("pond_api_keys.id"), nullable=True)  # Add this line
+
     # Timestamp (critical for time-series analysis)
     timestamp = Column(DateTime, nullable=False, index=True)
     
@@ -56,7 +57,8 @@ class SensorData(Base):
     
     # Relationships
     pond = relationship("Pond", back_populates="sensor_data")
-    
+    api_key = relationship("PondAPIKey", backref="sensor_readings")  # Add this line
+
     # Database indexes for performance (critical for time-series queries)
     __table_args__ = (
         Index('idx_pond_timestamp', 'pond_id', 'timestamp'),

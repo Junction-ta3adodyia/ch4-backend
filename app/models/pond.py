@@ -83,6 +83,7 @@ class Pond(Base):
         secondary=user_pond_association,
         back_populates="assigned_ponds"
     )
+    api_keys = relationship("PondAPIKey", back_populates="pond", cascade="all, delete-orphan")
 
 
 
@@ -136,5 +137,8 @@ class User(Base):
         secondary=user_pond_association,
         back_populates="assigned_users"
     )
+
+    api_keys = relationship("PondAPIKey", back_populates="user", cascade="all, delete-orphan")
+
     def __repr__(self):
         return f"<User(id={self.id}, username='{self.username}')>"

@@ -3,8 +3,12 @@ Dependency injection utilities
 Common dependencies for API endpoints
 """
 
+import hashlib
+import hmac
+import json
+import time
 from typing import Optional, Tuple
-from fastapi import Depends, HTTPException, status, Query
+from fastapi import Depends, HTTPException, status, Query, Request, Header
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 from jose import JWTError
@@ -13,6 +17,8 @@ from app.database import get_db
 from app.models.pond import User, Pond, UserRole
 from app.core.security import verify_token  # Now this import should work
 from app.config import settings
+from app.models.api_key import PondAPIKey
+
 
 # OAuth2 scheme for token authentication
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/v1/auth/login")
@@ -145,3 +151,90 @@ def get_sensor_type_filter(
             )
     
     return sensor_type
+
+async def get_pond_from_api_key(
+    request: Request,
+    x_api_key: str = Header(..., description="API key for pond access"),
+    x_signature: str = Header(..., description="HMAC signature"),
+    x_timestamp: str = Header(..., description="Request timestamp"),
+    db: Session = Depends(get_db)
+) -> Tuple[Pond, User, PondAPIKey, dict]:
+    """
+    Dependency to authenticate requests from sensors using an API key and HMAC signature.
+    Returns the authenticated pond, the user who owns the API key, the API key record, and request payload.
+    """
+    # Check timestamp to prevent replay attacks (5 minute window)
+    try:
+        request_time = float(x_timestamp)
+        current_time = time.time()
+        if abs(current_time - request_time) > 300:  # 5 minutes
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, 
+                detail="Request timestamp is too old or from the future."
+            )
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, 
+            detail="Invalid timestamp format."
+        )
+
+    # Get request body for signature verification
+    body = await request.body()
+    
+    # Find ALL active API keys first, then check which one matches
+    api_keys = db.query(PondAPIKey).join(
+        Pond, PondAPIKey.pond_id == Pond.id
+    ).join(
+        User, PondAPIKey.user_id == User.id
+    ).filter(
+        PondAPIKey.is_active == True,
+        Pond.is_active == True,
+        User.is_active == True
+    ).all()
+    
+    # Try to find the matching API key
+    authenticated_api_key = None
+    pond = None
+    user = None
+    print()
+    for api_key_record in api_keys:
+        if api_key_record.verify_api_key(x_api_key) and api_key_record.is_valid():
+            authenticated_api_key = api_key_record
+            pond = api_key_record.pond
+            user = api_key_record.user
+            break
+    
+    if not authenticated_api_key:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, 
+            detail="Invalid API Key, expired, or associated resources are inactive"
+        )
+
+    # Verify HMAC signature
+    message = x_timestamp.encode('utf-8') + b'.' + body
+    expected_signature = hmac.new(
+        authenticated_api_key.secret_key.encode('utf-8'),
+        msg=message,
+        digestmod=hashlib.sha256
+    ).hexdigest()
+
+    if not hmac.compare_digest(expected_signature, x_signature):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, 
+            detail="Invalid signature"
+        )
+
+    # Update usage statistics
+    authenticated_api_key.update_usage()
+    db.commit()
+
+    # Parse and return payload
+    try:
+        payload = json.loads(body.decode('utf-8')) if body else {}
+    except json.JSONDecodeError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid JSON payload"
+        )
+
+    return pond, user, authenticated_api_key, payload
