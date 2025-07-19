@@ -32,35 +32,31 @@ class PageHinkleyDetector:
     Detects abrupt changes in sensor data streams
     """
     
-    def __init__(self, threshold: float = 5.0, alpha: float = 0.01, min_samples: int = 10):
+    def __init__(self, threshold: float = 5.0, alpha: float = 0.01, min_samples: int = 3):
         """
         Initialize Page-Hinkley detector
         
         Args:
-            threshold: Detection threshold (higher = less sensitive)
+            threshold: Detection threshold (lower = more sensitive)
             alpha: Learning rate for mean estimation
             min_samples: Minimum samples before detection starts
         """
         self.threshold = threshold
         self.alpha = alpha
         self.min_samples = min_samples
-        self.states: Dict[str, PageHinkleyState] = {}
+        self.state = PageHinkleyState()
     
-    def update_and_detect(self, parameter: str, value: float) -> Tuple[bool, float]:
+    def update_and_detect(self, value: float) -> Tuple[bool, float]:
         """
         Update detector state and check for change point
         
         Args:
-            parameter: Parameter name (e.g., 'temperature', 'ph')
             value: New sensor value
             
         Returns:
             Tuple of (is_change_point, anomaly_score)
         """
-        if parameter not in self.states:
-            self.states[parameter] = PageHinkleyState()
-        
-        state = self.states[parameter]
+        state = self.state
         
         # Update mean estimate using exponential moving average
         if state.sample_count == 0:
@@ -93,190 +89,251 @@ class PageHinkleyDetector:
         if state.sample_count >= self.min_samples:
             if ph_up > self.threshold or ph_down > self.threshold:
                 is_change_point = True
-                # Reset cumulative sums after detection
-                state.cumulative_sum = 0.0
-                state.min_cumulative_sum = 0.0
-                state.max_cumulative_sum = 0.0
-                state.last_change_point = state.sample_count
+                print(f"🔍 Change detected: ph_up={ph_up:.2f}, ph_down={ph_down:.2f}, threshold={self.threshold}")
         
         return is_change_point, anomaly_score
-    
-    def get_state_info(self, parameter: str) -> Optional[Dict]:
-        """Get current state information for a parameter"""
-        if parameter not in self.states:
-            return None
-        
-        state = self.states[parameter]
-        return {
-            'sample_count': state.sample_count,
-            'mean_estimate': state.mean_estimate,
-            'cumulative_sum': state.cumulative_sum,
-            'last_change_point': state.last_change_point,
-            'samples_since_change': state.sample_count - state.last_change_point
-        }
 
 
 class AquaculturePageHinkleyService:
     """
-    Aquaculture-specific Page-Hinkley anomaly detection service
+    Aquaculture-specific Page-Hinkley anomaly detection service.
+    Uses sliding window approach per parameter for consistent detection.
     """
     
     def __init__(self):
-        # Parameter-specific detector configurations
+        # Parameter-specific detector configurations - made more sensitive
         self.detector_configs = {
-            'temperature': {'threshold': 3.0, 'alpha': 0.05, 'min_samples': 8},
-            'ph': {'threshold': 2.0, 'alpha': 0.03, 'min_samples': 10},
-            'dissolved_oxygen': {'threshold': 2.5, 'alpha': 0.04, 'min_samples': 8},
-            'ammonia': {'threshold': 1.5, 'alpha': 0.02, 'min_samples': 12},
-            'nitrate': {'threshold': 2.0, 'alpha': 0.02, 'min_samples': 12},
-            'turbidity': {'threshold': 3.0, 'alpha': 0.05, 'min_samples': 8},
-            'salinity': {'threshold': 2.5, 'alpha': 0.03, 'min_samples': 10}
+            'temperature': {'threshold': 1.5, 'alpha': 0.1, 'min_samples': 3},  # More sensitive
+            'ph': {'threshold': 1.0, 'alpha': 0.05, 'min_samples': 3},
+            'dissolved_oxygen': {'threshold': 1.2, 'alpha': 0.06, 'min_samples': 3},
+            'ammonia': {'threshold': 0.8, 'alpha': 0.04, 'min_samples': 3},
+            'nitrate': {'threshold': 1.0, 'alpha': 0.04, 'min_samples': 3},
+            'nitrite': {'threshold': 0.9, 'alpha': 0.04, 'min_samples': 3},
+            'turbidity': {'threshold': 1.5, 'alpha': 0.08, 'min_samples': 3},
+            'salinity': {'threshold': 1.2, 'alpha': 0.05, 'min_samples': 3},
+            'fish_count': {'threshold': 2.0, 'alpha': 0.1, 'min_samples': 4},
+            'fish_length': {'threshold': 1.8, 'alpha': 0.08, 'min_samples': 4},
+            'fish_weight': {'threshold': 1.8, 'alpha': 0.08, 'min_samples': 4},
+            'water_level': {'threshold': 1.4, 'alpha': 0.06, 'min_samples': 3},
+            'flow_rate': {'threshold': 1.6, 'alpha': 0.08, 'min_samples': 3}
         }
-        
-        # Store detectors per pond
-        self.pond_detectors: Dict[int, Dict[str, PageHinkleyDetector]] = {}
-    
-    def _get_detector(self, pond_id: int, parameter: str) -> PageHinkleyDetector:
-        """Get or create detector for specific pond and parameter"""
-        if pond_id not in self.pond_detectors:
-            self.pond_detectors[pond_id] = {}
-        
-        if parameter not in self.pond_detectors[pond_id]:
-            config = self.detector_configs.get(parameter, 
-                                             {'threshold': 2.5, 'alpha': 0.03, 'min_samples': 10})
-            self.pond_detectors[pond_id][parameter] = PageHinkleyDetector(**config)
-        
-        return self.pond_detectors[pond_id][parameter]
-    
-    def initialize_detector_from_history(self, pond_id: int, parameter: str, 
-                                       historical_values: List[float]) -> None:
-        """Initialize detector with historical data"""
-        detector = self._get_detector(pond_id, parameter)
-        
-        # Process historical data to warm up the detector
-        for value in historical_values:
-            detector.update_and_detect(parameter, value)
-    
-    def detect_anomaly(self, pond_id: int, sensor_data: SensorDataCreate) -> Dict[str, any]:
+
+    def _get_historical_data_for_parameter(self, pond_id: int, parameter: str, db: Session, limit: int = 10) -> List[float]:
         """
-        Detect anomalies in new sensor data using Page-Hinkley method
-        
-        Returns:
-            Dictionary with anomaly detection results
+        Get historical data for a specific parameter from the database.
         """
+        try:
+            historical_records = db.query(SensorData).filter(
+                SensorData.pond_id == pond_id,
+                # SensorData.is_anomaly == False,
+                getattr(SensorData, parameter).isnot(None)
+            ).order_by(desc(SensorData.timestamp)).limit(limit).all()
+            
+            # Reverse to get chronological order (oldest to newest)
+            historical_records.reverse()
+            
+            # Extract parameter values
+            values = [getattr(record, parameter) for record in historical_records]
+            # print(f"📊 Historical {parameter} data: {values}")
+            return values
+        except Exception as e:
+            print(f"Error fetching historical data for {parameter}: {e}")
+            return []
+
+    def _run_detection_on_parameter_window(self, parameter: str, window: List[float]) -> Tuple[bool, float, Dict]:
+        """
+        Runs Page-Hinkley detector on a window of data for a specific parameter.
+        """
+        if not window or len(window) < 2:
+            return False, 0.0, {'error': 'insufficient_data', 'window_size': len(window)}
+            
+        config = self.detector_configs.get(parameter, 
+                                         {'threshold': 1.5, 'alpha': 0.05, 'min_samples': 3})
+        
+        print(f"🔍 Running detection for {parameter} with config: {config}")
+        print(f"   Window data: {window}")
+        
+        detector = PageHinkleyDetector(**config)
+        
+        final_is_change_point = False
+        final_anomaly_score = 0.0
+        detection_details = {
+            'window_size': len(window),
+            'parameter': parameter,
+            'config': config,
+            'final_mean': 0.0,
+            'final_cumsum': 0.0,
+            'step_by_step': []
+        }
+
+        # Process each value in the window
+        for i, value in enumerate(window):
+            is_change_point, anomaly_score = detector.update_and_detect(value)
+            
+            step_info = {
+                'step': i,
+                'value': value,
+                'mean': detector.state.mean_estimate,
+                'cumsum': detector.state.cumulative_sum,
+                'is_change': is_change_point,
+                'score': anomaly_score
+            }
+            detection_details['step_by_step'].append(step_info)
+            
+            print(f"   Step {i}: value={value:.2f}, mean={detector.state.mean_estimate:.2f}, "
+                  f"cumsum={detector.state.cumulative_sum:.2f}, change={is_change_point}, score={anomaly_score:.3f}")
+            
+            # Store final results (last point)
+            if i == len(window) - 1:
+                final_is_change_point = is_change_point
+                final_anomaly_score = anomaly_score
+                detection_details['final_mean'] = detector.state.mean_estimate
+                detection_details['final_cumsum'] = detector.state.cumulative_sum
+                detection_details['is_last_point_anomaly'] = is_change_point
+                detection_details['anomaly_score'] = anomaly_score
+                detection_details['sample_count'] = detector.state.sample_count
+        
+        print(f"   🎯 Final result for {parameter}: anomaly={final_is_change_point}, score={final_anomaly_score:.3f}")
+        return final_is_change_point, final_anomaly_score, detection_details
+
+    async def detect_anomaly_with_alerts(self, pond_id: int, sensor_data: SensorDataCreate, db: Session) -> Dict[str, any]:
+        """
+        Detects anomalies by analyzing the new data point against historical data per parameter.
+        Creates an alert if anomalies are found.
+        """
+        print(f"🔍 Starting anomaly detection for pond {pond_id}")
+        
         results = {
             'is_anomaly': False,
             'anomaly_score': 0.0,
             'parameter_results': {},
-            'change_points_detected': []
+            'change_points_detected': [],
+            'alert_id': None
         }
-        
-        # Parameters to check
-        parameters = ['temperature', 'ph', 'dissolved_oxygen', 'ammonia', 'nitrate', 'turbidity']
-        
+
+        # All possible parameters to check
+        parameters_to_check = [
+            'temperature', 'ph', 'dissolved_oxygen', 'ammonia', 'nitrate', 'nitrite',
+            'turbidity', 'salinity', 'fish_count', 'fish_length', 'fish_weight',
+            'water_level', 'flow_rate'
+        ]
+
         max_anomaly_score = 0.0
-        total_change_points = 0
-        
-        for param in parameters:
-            value = getattr(sensor_data, param)
-            if value is not None:
-                detector = self._get_detector(pond_id, param)
-                is_change_point, anomaly_score = detector.update_and_detect(param, value)
-                
-                results['parameter_results'][param] = {
-                    'value': value,
-                    'is_change_point': is_change_point,
-                    'anomaly_score': anomaly_score,
-                    'detector_state': detector.get_state_info(param)
-                }
-                
-                if is_change_point:
-                    results['change_points_detected'].append(param)
-                    total_change_points += 1
-                
+        total_anomalies = 0
+
+        for param in parameters_to_check:
+            new_value = getattr(sensor_data, param)
+            
+            # Skip if new value is None
+            if new_value is None:
+                print(f"   ⏭️  Skipping {param}: value is None")
+                continue
+
+            # print(f"📊 Processing {param}: new_value={new_value}")
+
+            # Get historical data for this parameter
+            historical_values = self._get_historical_data_for_parameter(pond_id, param, db, limit=10)
+            
+            # Create window: historical + new value
+            window = historical_values + [new_value]
+            
+            # print(f"   Window size: {len(window)} (historical: {len(historical_values)} + new: 1)")
+            
+            # Run detection on this parameter's window
+            is_anomaly, anomaly_score, detection_details = self._run_detection_on_parameter_window(param, window)
+            
+            # Store results for this parameter
+            results['parameter_results'][param] = {
+                'value': new_value,
+                'is_anomaly': is_anomaly,
+                'anomaly_score': anomaly_score,
+                'historical_count': len(historical_values),
+                'window_size': len(window),
+                'detection_details': detection_details
+            }
+            
+            # Track overall anomaly status
+            if is_anomaly:
+                print(f"🚨 ANOMALY DETECTED in {param}!")
+                results['change_points_detected'].append(param)
+                total_anomalies += 1
                 max_anomaly_score = max(max_anomaly_score, anomaly_score)
-        
+
         # Determine overall anomaly status
-        high_anomaly_params = sum(1 for p in results['parameter_results'].values() 
-                                if p['anomaly_score'] > 0.7)
-        moderate_anomaly_params = sum(1 for p in results['parameter_results'].values() 
-                                    if 0.4 <= p['anomaly_score'] <= 0.7)
-        
-        results['is_anomaly'] = (
-            high_anomaly_params >= 1 or 
-            moderate_anomaly_params >= 2 or 
-            total_change_points >= 2
-        )
-        
+        results['is_anomaly'] = total_anomalies > 0
         results['anomaly_score'] = max_anomaly_score
+        results['total_anomalous_parameters'] = total_anomalies
+
+        print(f"🎯 Final detection results:")
+        print(f"   Total anomalies: {total_anomalies}")
+        print(f"   Max anomaly score: {max_anomaly_score:.3f}")
+        print(f"   Anomalous parameters: {results['change_points_detected']}")
+
+        # Create alert if anomaly detected
+        if results['is_anomaly']:
+            alert = await self.create_anomaly_alert(pond_id, sensor_data, results, db)
+            results['alert_id'] = alert.id if alert else None
         
         return results
-    
+
     async def create_anomaly_alert(self, pond_id: int, sensor_data: SensorDataCreate, 
                                 detection_results: Dict, db: Session) -> Optional[Alert]:
         """Create an alert when anomaly is detected"""
         try:
             anomaly_score = detection_results['anomaly_score']
             change_points = detection_results['change_points_detected']
+            total_anomalies = detection_results['total_anomalous_parameters']
             
-            # Determine severity
-            if anomaly_score >= 0.8 or len(change_points) >= 3:
+            # Determine severity based on number of anomalous parameters and score
+            if total_anomalies >= 3 or anomaly_score >= 0.8:
                 severity = AlertSeverity.CRITICAL
-            elif anomaly_score >= 0.6 or len(change_points) >= 2:
+            elif total_anomalies >= 2 or anomaly_score >= 0.6:
                 severity = AlertSeverity.WARNING
             else:
                 severity = AlertSeverity.INFO
             
-            # Create alert message
-            affected_params = ', '.join(change_points) if change_points else 'paramètres multiples'
+            affected_params = ', '.join(change_points[:5])  # Limit to first 5 for readability
+            if len(change_points) > 5:
+                affected_params += f" and {len(change_points) - 5} more"
             
-            alert_messages = {
-                'fr': f"Anomalie détectée - Paramètres: {affected_params}. Score: {anomaly_score:.2f}",
-                'ar': f"تم اكتشاف شذوذ - المعايير: {affected_params}. النتيجة: {anomaly_score:.2f}",
-                'en': f"Anomaly detected - Parameters: {affected_params}. Score: {anomaly_score:.2f}"
-            }
+            message = f"Anomaly detected in {affected_params}. Score: {anomaly_score:.2f}"
             
-            # Create alert data for context_data field
+            # Serialize sensor_data to ensure JSON compatibility
+            def make_json_serializable(obj):
+                """Convert datetime objects to ISO format strings for JSON serialization"""
+                if isinstance(obj, datetime):
+                    return obj.isoformat()
+                elif isinstance(obj, dict):
+                    return {key: make_json_serializable(value) for key, value in obj.items()}
+                elif isinstance(obj, list):
+                    return [make_json_serializable(item) for item in obj]
+                else:
+                    return obj
+            
+            # Create JSON-safe context data
             alert_context = {
-                'detection_method': 'page_hinkley',
+                'detection_method': 'page_hinkley_windowed_per_parameter',
                 'anomaly_score': anomaly_score,
+                'total_anomalous_parameters': total_anomalies,
                 'change_points_detected': change_points,
-                'parameter_details': detection_results['parameter_results'],
-                'sensor_values': {
-                    'temperature': sensor_data.temperature,
-                    'ph': sensor_data.ph,
-                    'dissolved_oxygen': sensor_data.dissolved_oxygen,
-                    'ammonia': sensor_data.ammonia,
-                    'nitrate': sensor_data.nitrate,
-                    'turbidity': sensor_data.turbidity
-                }
+                'parameter_results': make_json_serializable(detection_results['parameter_results']),
+                'sensor_values': make_json_serializable(sensor_data.dict())
             }
             
-            # Create alert with correct field names matching your model
             alert = Alert(
                 pond_id=pond_id,
                 alert_type=AlertType.ANOMALY_DETECTED,
                 severity=severity,
                 status=AlertStatus.ACTIVE,
-                
-                # Required fields for your model
-                parameter=change_points[0] if change_points else 'multiple',  # Use first parameter or 'multiple'
+                parameter=change_points[0] if change_points else 'multiple',
                 current_value=anomaly_score,
-                threshold_value=0.5,  # Anomaly threshold
-                
-                # Messages - match your model fields
-                title="Anomaly Detected",
-                message=alert_messages['en'],  # Default English message
-                message_fr=alert_messages['fr'],
-                message_ar=alert_messages['ar'],
-                
-                # Timing - use triggered_at instead of created_at
+                threshold_value=0.5,
+                title="Parameter Anomaly Detected",
+                message=message,
+                message_fr=f"Anomalie détectée - Paramètres: {affected_params}. Score: {anomaly_score:.2f}",
+                message_ar=f"تم اكتشاف شذوذ - المعايير: {affected_params}. النتيجة: {anomaly_score:.2f}",
                 triggered_at=datetime.now(timezone.utc),
-                
-                # Additional context in JSONB field
                 context_data=alert_context,
-                
-                # Empty notifications tracking
                 notifications_sent={}
             )
             
@@ -284,88 +341,28 @@ class AquaculturePageHinkleyService:
             db.commit()
             db.refresh(alert)
             
-            print(f"✅ Anomaly alert created successfully: ID {alert.id}")
+            print(f"✅ Parameter anomaly alert created successfully: ID {alert.id}")
+            print(f"   Affected parameters: {affected_params}")
+            print(f"   Total anomalous parameters: {total_anomalies}")
             return alert
             
         except Exception as e:
-            print(f"❌ Error creating anomaly alert: {e}")
+            print(f"❌ Error creating parameter anomaly alert: {e}")
             import traceback
             traceback.print_exc()
             db.rollback()
             return None
-    
-    async def detect_anomaly_with_alerts(self, pond_id: int, sensor_data: SensorDataCreate, db: Session) -> Dict[str, any]:
-        """Detect anomalies and create alerts if needed"""
-        # Initialize detectors if needed
-        await self._initialize_detectors_if_needed(pond_id, db)
-        
-        # Run anomaly detection
-        results = self.detect_anomaly(pond_id, sensor_data)
-        
-        # If anomaly detected, create alert
-        if results['is_anomaly']:
-            alert = await self.create_anomaly_alert(pond_id, sensor_data, results, db)
-            results['alert_created'] = alert is not None
-            results['alert_id'] = alert.id if alert else None
-        else:
-            results['alert_created'] = False
-            results['alert_id'] = None
-        
-        return results
-    
-    async def _initialize_detectors_if_needed(self, pond_id: int, db: Session) -> None:
-        """Initialize Page-Hinkley detectors with historical data if needed"""
-        try:
-            # Check if detectors are already initialized
-            if pond_id in self.pond_detectors:
-                return
-            
-            # Get historical data (last 100 readings)
-            historical_data = db.query(SensorData).filter(
-                and_(
-                    SensorData.pond_id == pond_id,
-                    SensorData.is_anomaly == False
-                )
-            ).order_by(desc(SensorData.timestamp)).limit(100).all()
-            
-            if len(historical_data) < 10:
-                return
-            
-            # Reverse to get chronological order
-            historical_data.reverse()
-            
-            # Initialize detectors for each parameter
-            parameters = ['temperature', 'ph', 'dissolved_oxygen', 'ammonia', 'nitrate', 'turbidity']
-            
-            for param in parameters:
-                values = [getattr(record, param) for record in historical_data 
-                         if getattr(record, param) is not None]
-                
-                if len(values) >= 5:
-                    self.initialize_detector_from_history(pond_id, param, values)
-            
-            print(f"Initialized Page-Hinkley detectors for pond {pond_id} with {len(historical_data)} records")
-            
-        except Exception as e:
-            print(f"Error initializing detectors: {e}")
-    
+
     def get_pond_detector_status(self, pond_id: int) -> Dict[str, any]:
-        """Get status of all detectors for a pond"""
-        if pond_id not in self.pond_detectors:
-            return {'status': 'no_detectors', 'parameters': []}
-        
-        status = {
-            'status': 'active',
-            'parameters': {}
+        """Get status of windowed detection for a pond"""
+        return {
+            'status': 'windowed_per_parameter_detection',
+            'description': 'Uses sliding window of 10 previous points per parameter plus new point',
+            'window_size': 10,
+            'parameters_monitored': list(self.detector_configs.keys()),
+            'detection_method': 'page_hinkley_change_point_per_parameter',
+            'parameter_configs': self.detector_configs
         }
-        
-        for param, detector in self.pond_detectors[pond_id].items():
-            for param_name in detector.states:
-                state_info = detector.get_state_info(param_name)
-                if state_info:
-                    status['parameters'][param_name] = state_info
-        
-        return status
 
 
 # Global service instance
@@ -376,7 +373,7 @@ async def detect_anomalies_page_hinkley(sensor_data: SensorDataCreate, db: Sessi
     """Main anomaly detection function using Page-Hinkley method"""
     try:
         pond_id = sensor_data.pond_id
-        results = page_hinkley_service.detect_anomaly(pond_id, sensor_data)
+        results = await page_hinkley_service.detect_anomaly_with_alerts(pond_id, sensor_data, db)
         return results['is_anomaly']
     except Exception as e:
         print(f"Error in Page-Hinkley anomaly detection: {e}")

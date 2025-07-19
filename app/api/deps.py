@@ -75,7 +75,7 @@ async def get_current_admin_user(
     """
     Get current admin user (must be active, verified, and admin)
     """
-    if not current_user.is_admin:
+    if not current_user.role == UserRole.ADMIN:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not enough permissions"

@@ -309,7 +309,7 @@ async def resolve_alerts(
     alerts = db.query(Alert).join(Pond).filter(
         and_(
             Alert.id.in_(resolve_data.alert_ids),
-            Pond.assigned_users(id = current_user.id),
+            Pond.assigned_users.any(id = current_user.id),
             Alert.status.in_([AlertStatus.ACTIVE, AlertStatus.ACKNOWLEDGED])
         )
     ).all()

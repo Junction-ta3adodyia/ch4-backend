@@ -448,11 +448,17 @@ async def get_anomaly_detector_status(
 ):
     """Get Page-Hinkley detector status for a pond"""
     
-    # Verify pond access
-    pond = db.query(Pond).filter(
-        Pond.id == pond_id,
-        Pond.assigned_users.any(id=current_user.id)
-    ).first()
+    if current_user.role != UserRole.ADMIN:
+        # Verify pond access
+        pond = db.query(Pond).filter(
+            Pond.id == pond_id,
+            Pond.assigned_users.any(id=current_user.id)
+        ).first()
+    else:
+        # Admins can access all ponds
+        pond = db.query(Pond).filter(Pond.id == pond_id).first()
+
+    print(f"🔍 Checking anomaly detector status for pond {pond_id} by user {current_user.username}")
     
     if not pond:
         raise HTTPException(

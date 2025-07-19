@@ -70,7 +70,6 @@ class SensorDataCreate(SensorDataBase):
             now_utc = datetime.now(timezone.utc)
             if v > now_utc:
                 raise ValueError('Timestamp cannot be in the future')
-        
         return v
     
     @validator('temperature')
