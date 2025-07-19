@@ -242,8 +242,8 @@ app.include_router(users.router, prefix="/api/v1")
 app.include_router(ponds.router, prefix="/api/v1")
 app.include_router(sensors.router, prefix="/api/v1")
 app.include_router(alerts.router, prefix="/api/v1")
-app.include_router(api_key.router, prefix="/api-keys", tags=["api-keys"])
-app.include_router(simulation.router, prefix="/simulation", tags=["simulation"])
+app.include_router(api_key.router, prefix="/api/v1/api-keys", tags=["api-keys"])
+app.include_router(simulation.router, prefix="/api/v1/simulation", tags=["simulation"])
 
 
 
@@ -365,7 +365,8 @@ async def get_dashboard_summary(
                 SensorData.timestamp >= recent_threshold
             )
         ).count()
-    
+    else:
+        recent_readings = db.query(SensorData).filter(SensorData.timestamp >= recent_threshold).count()
     # Get health distribution (simplified)
     health_distribution = {
         "excellent": 0,

@@ -44,11 +44,10 @@ async def get_ponds(
     
     # Apply pagination - FIXED
     ponds = query.offset(skip).limit(limit).all()
-    
     # Rest of the function remains the same...
     pond_summaries = []
     for pond in ponds:
-        health_data = await calculate_pond_health(pond.id, db)
+        health_data = calculate_pond_health(pond.id, db)
         
         from app.models.alert import Alert, AlertStatus
         active_alerts = db.query(Alert).filter(
@@ -110,7 +109,7 @@ async def get_pond(
     
     # Get additional statistics
     latest_reading = await get_pond_latest_data(pond_id, db)
-    health_data = await calculate_pond_health(pond_id, db)
+    health_data =  calculate_pond_health(pond_id, db)
     
     # Get active alerts count
     from app.models.alert import Alert, AlertStatus
@@ -191,7 +190,7 @@ async def get_pond_health(
     check_pond_ownership(pond_id, current_user, db)
     
     # Calculate health assessment
-    health_data = await calculate_pond_health(pond_id, db, days=days)
+    health_data = calculate_pond_health(pond_id, db, days=days)
     
     if not health_data:
         raise HTTPException(
